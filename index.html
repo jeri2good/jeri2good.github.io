@@ -2,71 +2,74 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat with Blaze the Monster Truck!</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chat with Blaze!</title>
     <style>
-        body {
-            font-family: 'Comic Sans MS', cursive, sans-serif;
-            background-color: #87CEEB; /* Sky blue background */
+        * {
+            box-sizing: border-box;
             margin: 0;
             padding: 0;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #FF6B00; /* Blaze orange */
+            color: #FFFFFF;
             display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .header {
+            background-color: #D15600; /* Darker orange */
+            padding: 10px;
+            text-align: center;
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            background-image: url('https://example.com/racetrack-background.jpg');
-            background-size: cover;
-            background-position: center;
-        }
-        .container {
-            background-color: rgba(255, 255, 255, 0.9);
-            border-radius: 20px;
             padding: 20px;
-            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
-            text-align: center;
-            max-width: 800px;
-            width: 90%;
-        }
-        h1 {
-            color: #FF4500; /* Orange-red color */
-            font-size: 2.5em;
-            margin-bottom: 20px;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        .blaze-image {
-            width: 200px;
-            height: auto;
-            margin-bottom: 20px;
         }
         .widget-container {
-            background-color: #FFF;
+            width: 100%;
+            max-width: 500px;
+            height: 70vh;
+            background-color: #FFFFFF;
             border-radius: 15px;
-            padding: 20px;
-            margin-top: 20px;
-            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         .instructions {
-            font-size: 1.2em;
-            color: #4A4A4A;
-            margin-bottom: 20px;
-        }
-        .footer {
             margin-top: 20px;
-            font-size: 0.9em;
-            color: #666;
+            text-align: center;
+            font-size: 1em;
+        }
+        @media (max-width: 480px) {
+            .header {
+                font-size: 1.2em;
+            }
+            .widget-container {
+                height: 80vh;
+            }
+            .instructions {
+                font-size: 0.9em;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Chat with Blaze the Monster Truck!</h1>
-        <img src="https://example.com/blaze-image.png" alt="Blaze the Monster Truck" class="blaze-image">
-        <p class="instructions">Hey there, young racer! Ready to chat with Blaze? Just click on his icon below and start your adventure!</p>
+    <div class="header">
+        Chat with Blaze the Monster Truck!
+    </div>
+    <div class="content">
         <div class="widget-container">
             <elevenlabs-convai agent-id="KOqlYqtC3taxWrqZHOi9"></elevenlabs-convai>
-            <script src="https://elevenlabs.io/convai-widget/index.js" async type="text/javascript"></script>
         </div>
-        <p class="footer">Remember, Blaze is here to have fun and learn with you. Always be kind and respectful!</p>
+        <p class="instructions">Tap on Blaze to start chatting!</p>
     </div>
+    <script src="https://elevenlabs.io/convai-widget/index.js" async type="text/javascript"></script>
 </body>
 </html>
