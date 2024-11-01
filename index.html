@@ -4,72 +4,184 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Chat with Blaze!</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;500;700&display=swap" rel="stylesheet">
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        :root {
+            --primary-color: #FF6B00;
+            --secondary-color: #FF8C00;
+            --accent-color: #D15600;
+            --text-light: #FFFFFF;
+            --text-dark: #2D3748;
+            --shadow-color: rgba(0, 0, 0, 0.1);
         }
+
         body {
-            font-family: 'Arial', sans-serif;
-            background-color: #FF6B00; /* Blaze orange */
-            color: #FFFFFF;
+            font-family: 'Poppins', sans-serif;
+            background: linear-gradient(145deg, var(--primary-color), var(--secondary-color));
+            color: var(--text-light);
             display: flex;
             flex-direction: column;
             min-height: 100vh;
-        }
-        .header {
-            background-color: #D15600; /* Darker orange */
-            padding: 10px;
-            text-align: center;
-            font-size: 1.5em;
-            font-weight: bold;
-        }
-        .content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
             justify-content: center;
             align-items: center;
+            animation: fadeIn 1.5s ease-in-out;
             padding: 20px;
         }
+
+        .header-container {
+            width: 100%;
+            max-width: 800px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 4px 20px var(--shadow-color);
+        }
+
+        .title {
+            font-size: 2.2em;
+            font-weight: 700;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px var(--shadow-color);
+        }
+
+        .subtitle {
+            font-size: 1.1em;
+            font-weight: 300;
+            opacity: 0.9;
+        }
+
         .widget-container {
             width: 100%;
             max-width: 500px;
             height: 70vh;
-            background-color: #FFFFFF;
-            border-radius: 15px;
+            background-color: var(--text-light);
+            border-radius: 20px;
             overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 8px 30px var(--shadow-color);
+            animation: slideIn 1s ease-in-out;
+            position: relative;
         }
-        .instructions {
-            margin-top: 20px;
-            text-align: center;
-            font-size: 1em;
+
+        .chat-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: var(--text-dark);
+            padding: 20px;
         }
-        @media (max-width: 480px) {
-            .header {
-                font-size: 1.2em;
+
+        .start-button {
+            background: var(--text-light);
+            color: var(--primary-color);
+            padding: 15px 30px;
+            margin-top: 30px;
+            border-radius: 12px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.1em;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px var(--shadow-color);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .start-button::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transform: translateX(-100%);
+            transition: 0.5s;
+        }
+
+        .start-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px var(--shadow-color);
+        }
+
+        .start-button:hover::after {
+            transform: translateX(100%);
+        }
+
+        .status-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 10px;
+            height: 10px;
+            background-color: #4CAF50;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #4CAF50;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @media (max-width: 640px) {
+            .title { font-size: 1.8em; }
+            .subtitle { font-size: 1em; }
+            .widget-container { height: 75vh; }
+            body { padding: 10px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .start-button, .widget-container, body {
+                animation: none;
             }
-            .widget-container {
-                height: 80vh;
-            }
-            .instructions {
-                font-size: 0.9em;
+            .start-button:hover {
+                transform: none;
             }
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        Chat with Blaze the Monster Truck!
-    </div>
-    <div class="content">
-        <div class="widget-container">
-            <elevenlabs-convai agent-id="KOqlYqtC3taxWrqZHOi9"></elevenlabs-convai>
+    <div class="header-container">
+        <div class="header">
+            <h1 class="title">Chat with Blaze the Monster Truck!</h1>
+            <p class="subtitle">Your friendly monster truck companion is ready to roll!</p>
         </div>
-        <p class="instructions">Tap on Blaze to start chatting!</p>
     </div>
-    <script src="https://elevenlabs.io/convai-widget/index.js" async type="text/javascript"></script>
+    <div class="widget-container">
+        <div class="status-indicator"></div>
+        <div class="chat-placeholder">
+            <!-- Placeholder for the chat widget -->
+            <div style="text-align: center;">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                <p style="margin-top: 15px; font-size: 1.1em;">Chat widget would appear here</p>
+            </div>
+        </div>
+    </div>
+    <button class="start-button">Start Chatting with Blaze!</button>
 </body>
 </html>
