@@ -3,7 +3,7 @@
 Audience: the coding agent working on Jermaine's local machine / Home Assistant box.
 Subject file: **`music-assistant.html`** on branch `claude/music-assistant-html-replica-0cn58p`.
 
-This page is a pixel-faithful replica of the "Aurora Media Center" dashboard design.
+This page is a pixel-faithful replica of the "Mavis Media Center" dashboard design.
 It is a single self-contained HTML file (no build step, no npm, no framework; the only
 external resource is the Google Fonts *Inter* stylesheet). All UI controls are already
 present and carry stable `data-*` / `id` hooks, and a stubbed `MusicAssistant` WebSocket
@@ -17,20 +17,20 @@ dashboard and (2) replace the stubs with live data. **Do not redesign anything.*
 Recommended path (simplest, no custom-card development):
 
 1. Copy the file to HA's public www folder:
-   `cp music-assistant.html /config/www/aurora/index.html`
-   It is then served at `http://<HA>:8123/local/aurora/index.html`.
+   `cp music-assistant.html /config/www/mavis/index.html`
+   It is then served at `http://<HA>:8123/local/mavis/index.html`.
 2. Add it as a sidebar panel in `configuration.yaml`:
 
    ```yaml
    panel_iframe:          # or the "Webpage" dashboard type in newer HA (Settings → Dashboards → Add → Webpage)
-     aurora:
-       title: "Aurora Media"
+     mavis:
+       title: "Mavis Media"
        icon: mdi:music-box-multiple
-       url: /local/aurora/index.html
+       url: /local/mavis/index.html
    ```
 
    In HA ≥2024 the UI equivalent is Settings → Dashboards → **Add dashboard → Webpage**,
-   pointing at `/local/aurora/index.html`. Either way the page fills the view.
+   pointing at `/local/mavis/index.html`. Either way the page fills the view.
 3. Reload HA (or restart) and open the panel. The page runs in "demo mode" until
    `MA_CONFIG.host` is set (see §3).
 
@@ -51,7 +51,7 @@ Notes on this mounting mode:
   `data-group`, `data-cmd`, `data-action`, `data-nav`, `data-device` attributes and the
   `np-*` / `btn-*` element ids. Other code (and future sessions) target these.
 - **Do not add a framework, bundler, or npm dependency.** Keep it one file. If you must
-  split, `aurora.css` + `aurora.js` next to the HTML is the maximum allowed.
+  split, `mavis.css` + `mavis.js` next to the HTML is the maximum allowed.
 - **Do not commit secrets.** `MA_CONFIG.token` / HA long-lived tokens must never be
   committed — this repo is a public GitHub Pages site. Inject them locally (the copy in
   `/config/www` is fine to configure; the repo copy keeps empty strings).
