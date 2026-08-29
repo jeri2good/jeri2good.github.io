@@ -39,17 +39,27 @@ Your tasks, in order:
    command name and argument shape at `http://<MA_HOST>:8095/api-docs` and fix
    only that one call site. Do not restructure the client.
 
-4. Wire the non-music controls. The device cards, bottom pills, and Quick
-   Actions (`tv_*`, `avr_*`, `spk_*`, `proj_*`, `lights_*`, `source_*`,
-   `party_mode`, `relax_mode`, `good_night`, `all_off`, `multi_room_sync`,
-   `sound_mode`, `night_mode`, `audio_delay`, `output_routing`) are Home
-   Assistant territory — scripts, scenes, remote/light/media_player entities —
-   NOT Music Assistant. They all funnel into the single `haAction(cmd)` function
-   near the end of the file. Implement it against the HA WebSocket API
-   (`ws(s)://<HA>/api/websocket` → `auth` with a long-lived token →
-   `call_service`), mapping each command string to a service call. Ask me which
-   entities/scripts to use for any mapping you can't determine; leave unmapped
-   commands as logged placeholders rather than guessing.
+4. Wire the non-music controls using your full knowledge of this Home Assistant
+   setup — you have complete authority here, so map everything yourself; do not
+   come back with questions about entity choices. The device cards, bottom
+   pills, and Quick Actions (`tv_*`, `avr_*`, `spk_*`, `proj_*`, `lights_*`,
+   `source_*`, `party_mode`, `relax_mode`, `good_night`, `all_off`,
+   `multi_room_sync`, `sound_mode`, `night_mode`, `audio_delay`,
+   `output_routing`) are Home Assistant territory — scripts, scenes,
+   remote/light/switch/media_player entities — NOT Music Assistant. They all
+   funnel into the single `haAction(cmd)` function near the end of the file.
+   Implement it against the HA WebSocket API (`ws(s)://<HA>/api/websocket` →
+   `auth` with a long-lived token → `call_service`), and map each command
+   string to the best-fitting real entity or script in this installation:
+   walk the entity/device/area registries, match by area and device class
+   (e.g. the media-room TV to `tv_power`, the theater lights to `lights_*`),
+   and where a mode has no existing scene or script (`party_mode`,
+   `good_night`, …), create one in HA that does something sensible for this
+   home and call it. Also update each card's visible state text (input names,
+   percentages, on/off) from the real entity states so the tiles reflect
+   reality — same styling, live values. Only if a control has no plausible
+   hardware in this home at all, leave it as a logged placeholder and note it
+   in your final report with the mapping table of everything you wired.
 
 Hard constraints — violating any of these is a failed task:
 - Zero visual changes. After your work, the page must still match
@@ -68,6 +78,6 @@ see the mock's albums, players, and Now Playing data appear.
 Definition of done: on the real server, the shelves show my actual library with
 real cover art, search works, room tiles show my actual players, Now Playing
 tracks what's really playing and updates live, every transport control moves the
-real player, the §4 device controls drive their HA entities (or are explicitly
-listed back to me as awaiting entity choices), and the page still looks
-identical to the reference render.
+real player, the §4 device controls drive the HA entities you mapped (with a
+mapping table in your final report, plus any controls left unwired for lack of
+hardware), and the page still looks identical to the reference render.
