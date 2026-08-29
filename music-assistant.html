@@ -247,6 +247,7 @@ button { font-family: inherit; color: inherit; background: none; border: none; c
 .album-card { cursor: pointer; min-width: 0; }
 .album-art {
   aspect-ratio: 1;
+  position: relative;
   border-radius: 14px;
   overflow: hidden;
   border: 1px solid rgba(255,255,255,.06);
@@ -471,6 +472,7 @@ button { font-family: inherit; color: inherit; background: none; border: none; c
 .np-track { display: flex; gap: 14px; align-items: flex-start; }
 .np-art {
   width: 92px; height: 92px; flex: none;
+  position: relative;
   border-radius: 12px; overflow: hidden;
   border: 1px solid rgba(255,255,255,.08);
   box-shadow: 0 6px 18px rgba(0,0,0,.5);
@@ -541,6 +543,12 @@ input[type=range]::-moz-range-thumb {
 }
 .adv-controls:hover { border-color: var(--line-2); }
 .adv-controls .caret { margin-left: auto; color: #8fa4c6; }
+
+/* live artwork overlays the placeholder SVG when Music Assistant provides an image */
+.album-art img.live-art, .np-art img.live-art {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
 
 /* range fill trick */
 .filled { background: linear-gradient(90deg, var(--accent-2) var(--fill, 30%), #1c3050 var(--fill, 30%)); }
@@ -1336,179 +1344,450 @@ input[type=range]::-moz-range-thumb {
 
 <script>
 /* ============================================================
-   MUSIC ASSISTANT INTEGRATION LAYER
+   MAVIS MEDIA CENTER — live Music Assistant client
    ------------------------------------------------------------
-   Music Assistant (Home Assistant add-on) exposes a JSON-RPC
-   style WebSocket API at ws://<HA_HOST>:8095/ws.
-   Flow: connect -> server sends ServerInfo -> (if auth enabled)
-   send an auth token -> send CommandMessage objects like:
-     { message_id: 1, command: "players/all" }
-     { message_id: 2, command: "players/cmd/play",  args: { player_id } }
-     { message_id: 3, command: "players/cmd/pause", args: { player_id } }
-     { message_id: 4, command: "players/cmd/next",  args: { player_id } }
-     { message_id: 5, command: "players/cmd/volume_set", args: { player_id, volume_level } }
-     { message_id: 6, command: "music/albums/library_items", args: { limit: 12 } }
-     { message_id: 7, command: "player_queues/play_media", args: { queue_id, media } }
-   Events (queue_updated, player_updated, media_item_added, ...)
-   are pushed to subscribed clients — use them to refresh the
-   Now Playing panel, room EQ indicators and album shelves.
-   Alternatively, when embedded as a Home Assistant dashboard
-   (iframe / panel_custom), call HA services on the media_player
-   entities Music Assistant creates (media_player.living_room etc.)
-   via the HA WebSocket API (wss://<HA>/api/websocket, call_service).
+   Talks directly to the Music Assistant server (HA add-on) over
+   its WebSocket API: ws(s)://<host>:<port>/ws
+   Protocol: server pushes ServerInfo on connect; client optionally
+   authenticates, then exchanges JSON-RPC style messages:
+     -> { message_id, command, args }
+     <- { message_id, result } | { message_id, error_code, details }
+     <- { event, object_id, data }   (unsolicited state events)
+   With no host configured the page runs in demo mode using the
+   built-in placeholder content. Command names follow MA 2.x —
+   cross-check http://<host>:8095/api-docs if a command errors.
    ============================================================ */
-const MA_CONFIG = {
-  host: '',        // e.g. 'homeassistant.local'
-  port: 8095,
-  token: '',       // long-lived token if auth is enabled
-  defaultPlayer: 'living_room',
-};
+
+/* ---------------- configuration ----------------
+   NEVER hardcode real values in the repo copy (public site).
+   Configure the deployed copy at runtime instead, once, via URL:
+     /local/mavis/index.html?host=homeassistant.local&port=8095&token=XYZ
+   Values persist to localStorage so later visits need no params.
+   (?host=clear wipes the stored config.)                        */
+const MA_CONFIG = { host: '', port: 8095, token: '', tls: false };
+try {
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('host') === 'clear') {
+    ['host','port','token','tls'].forEach(k => localStorage.removeItem('mavis.' + k));
+  } else {
+    for (const k of ['host','port','token','tls']) {
+      if (qs.has(k)) localStorage.setItem('mavis.' + k, qs.get(k));
+    }
+  }
+  for (const k of ['host','port','token','tls']) {
+    const v = localStorage.getItem('mavis.' + k);
+    if (v !== null && v !== '') {
+      MA_CONFIG[k] = k === 'port' ? +v : k === 'tls' ? v === 'true' : v;
+    }
+  }
+} catch (e) { /* storage unavailable (some embeds) — inline config only */ }
 
 class MusicAssistant {
-  constructor(cfg) { this.cfg = cfg; this.ws = null; this.msgId = 0; this.connected = false; }
+  constructor(cfg) {
+    this.cfg = cfg;
+    this.ws = null;
+    this.msgId = 0;
+    this.connected = false;      // true once ready to accept commands
+    this.serverInfo = null;
+    this.pending = new Map();    // message_id -> {resolve, reject}
+    this.listeners = new Map();  // event name -> [fn]
+    this.onReady = null;
+  }
+  get baseUrl() {
+    if (this.serverInfo && this.serverInfo.base_url) return this.serverInfo.base_url;
+    return `${this.cfg.tls ? 'https' : 'http'}://${this.cfg.host}:${this.cfg.port}`;
+  }
   connect() {
-    if (!this.cfg.host) { console.info('[MA] No host configured — running in demo mode.'); return; }
-    this.ws = new WebSocket(`ws://${this.cfg.host}:${this.cfg.port}/ws`);
-    this.ws.onopen = () => { this.connected = true; console.info('[MA] connected'); };
-    this.ws.onclose = () => { this.connected = false; setTimeout(() => this.connect(), 5000); };
-    this.ws.onmessage = (e) => this.handleMessage(JSON.parse(e.data));
+    if (!this.cfg.host) { console.info('[MA] No host configured — demo mode. Add ?host=<ma-server>&port=8095 to the URL.'); return; }
+    const url = `${this.cfg.tls ? 'wss' : 'ws'}://${this.cfg.host}:${this.cfg.port}/ws`;
+    console.info('[MA] connecting to', url);
+    this.ws = new WebSocket(url);
+    this.ws.onopen = () => console.info('[MA] socket open, waiting for ServerInfo');
+    this.ws.onerror = () => console.warn('[MA] socket error (server down? wrong host/port? mixed-content block if HA is https?)');
+    this.ws.onclose = () => {
+      this.connected = false;
+      this.pending.forEach(p => p.reject(new Error('socket closed')));
+      this.pending.clear();
+      console.warn('[MA] socket closed — reconnecting in 5s');
+      setTimeout(() => this.connect(), 5000);
+    };
+    this.ws.onmessage = (e) => {
+      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+      this.handleMessage(msg);
+    };
   }
-  command(command, args = {}) {
-    if (!this.connected) { console.info('[MA demo]', command, args); return; }
-    this.ws.send(JSON.stringify({ message_id: ++this.msgId, command, args }));
+  async handleMessage(msg) {
+    // 1) reply to a pending command
+    if (msg.message_id !== undefined && this.pending.has(msg.message_id)) {
+      const p = this.pending.get(msg.message_id);
+      this.pending.delete(msg.message_id);
+      if (msg.error_code !== undefined || msg.error !== undefined) {
+        p.reject(new Error(`${msg.error_code || 'error'}: ${msg.details || msg.error || ''}`));
+      } else p.resolve(msg.result);
+      return;
+    }
+    // 2) event push
+    if (msg.event) {
+      (this.listeners.get(msg.event) || []).forEach(fn => {
+        try { fn(msg.data, msg.object_id); } catch (err) { console.warn('[MA] event handler failed', msg.event, err); }
+      });
+      return;
+    }
+    // 3) first frame: ServerInfo
+    if (msg.server_version && !this.serverInfo) {
+      this.serverInfo = msg;
+      console.info(`[MA] ServerInfo: v${msg.server_version} (schema ${msg.schema_version})`);
+      if (this.cfg.token) {
+        try { await this.cmdRaw('auth', { token: this.cfg.token }); console.info('[MA] authenticated'); }
+        catch (err) { console.warn('[MA] auth command failed (server may not require auth):', err.message); }
+      }
+      this.connected = true;
+      if (this.onReady) this.onReady();
+      return;
+    }
+    console.debug('[MA] unhandled message', msg);
   }
-  handleMessage(msg) {
-    // TODO: route ServerInfo/auth, command results and events
-    // (player_updated, queue_updated) into the UI update helpers.
-    console.debug('[MA] message', msg);
+  cmdRaw(command, args = {}) {
+    return new Promise((resolve, reject) => {
+      const message_id = ++this.msgId;
+      this.pending.set(message_id, { resolve, reject });
+      this.ws.send(JSON.stringify({ message_id, command, args }));
+      setTimeout(() => {
+        if (this.pending.has(message_id)) {
+          this.pending.delete(message_id);
+          reject(new Error(`timeout waiting for ${command}`));
+        }
+      }, 10000);
+    });
   }
-  playerCmd(cmd, playerId, extra = {}) {
-    this.command(`players/cmd/${cmd}`, { player_id: playerId, ...extra });
+  async cmd(command, args = {}) {
+    if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.info('[MA demo]', command, args);
+      return null;
+    }
+    try { return await this.cmdRaw(command, args); }
+    catch (err) { console.warn(`[MA] ${command} failed:`, err.message, '— verify the command name on /api-docs'); return null; }
+  }
+  playerCmd(cmd, playerId, extra = {}) { return this.cmd(`players/cmd/${cmd}`, { player_id: playerId, ...extra }); }
+  on(event, fn) {
+    if (!this.listeners.has(event)) this.listeners.set(event, []);
+    this.listeners.get(event).push(fn);
   }
 }
 const ma = new MusicAssistant(MA_CONFIG);
-ma.connect();
 
-/* ---------------- live clock ---------------- */
+/* ---------------- helpers ---------------- */
+const $ = (id) => document.getElementById(id);
+function fmt(sec) { sec = Math.max(0, Math.floor(sec || 0)); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`; }
+
+// Resolve artwork for any MA media item / queue item via the image proxy.
+function imageUrl(item, size = 512) {
+  if (!item) return null;
+  const img = item.image
+    || (item.metadata && item.metadata.images && item.metadata.images[0])
+    || (item.media_item && item.media_item.metadata && item.media_item.metadata.images
+        && item.media_item.metadata.images[0])
+    || (item.album && item.album.image);
+  if (!img || !img.path) return null;
+  if (img.remotely_accessible) return img.path;
+  return `${ma.baseUrl}/imageproxy?path=${encodeURIComponent(img.path)}&provider=${encodeURIComponent(img.provider || 'builtin')}&size=${size}`;
+}
+
+// Overlay a live artwork image on a tile, keeping the SVG as fallback.
+function setArt(container, url) {
+  let img = container.querySelector('img.live-art');
+  if (!url) { if (img) img.remove(); return; }
+  if (!img) {
+    img = document.createElement('img');
+    img.className = 'live-art';
+    img.alt = '';
+    img.onerror = () => img.remove();   // broken image -> placeholder SVG shows again
+    container.appendChild(img);
+  }
+  if (img.getAttribute('src') !== url) img.src = url;
+}
+
+function setRange(el, value, max) {
+  if (max !== undefined && max > 0) el.max = max;
+  el.value = value;
+  const pct = (el.value - el.min) / ((el.max - el.min) || 1) * 100;
+  el.style.setProperty('--fill', pct + '%');
+}
+
+/* ---------------- app state ---------------- */
+const state = {
+  players: [],          // from players/all
+  queues: new Map(),    // queue_id -> queue
+  activePlayerId: null, // room currently controlled
+  playing: false,
+  seeking: false,
+  currentUri: null,     // now-playing track uri (for favorites)
+  albumsOffset: 0,
+  albumsQuery: { order_by: 'timestamp_added_desc' },
+};
+const activeQueue = () => state.queues.get(state.activePlayerId);
+
+/* ---------------- clock ---------------- */
 function tickClock() {
   const now = new Date();
   let h = now.getHours(); const ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12 || 12;
-  const m = String(now.getMinutes()).padStart(2, '0');
-  document.getElementById('clock-time').textContent = `${h}:${m} ${ampm}`;
-  document.getElementById('clock-date').textContent =
-    now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  $('clock-time').textContent = `${h}:${String(now.getMinutes()).padStart(2, '0')} ${ampm}`;
+  $('clock-date').textContent = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 tickClock();
 setInterval(tickClock, 15000);
 
-/* ---------------- UI state ---------------- */
-let activeRoom = MA_CONFIG.defaultPlayer;
-let playing = true;
+/* ---------------- rooms: real MA players onto the room tiles ---------------- */
+function renderRooms() {
+  const tiles = Array.from(document.querySelectorAll('.room-card'));
+  tiles.forEach((tile, i) => {
+    const p = state.players[i];
+    if (!p) { tile.dataset.playerId = ''; return; }   // fewer players than tiles: extras stay decorative
+    tile.dataset.playerId = p.player_id;
+    tile.querySelector('.room-name').textContent = p.display_name || p.name || p.player_id;
+    tile.classList.toggle('playing', p.state === 'playing');
+    tile.classList.toggle('active', p.player_id === state.activePlayerId);
+  });
+}
 
-// sidebar nav
+function updatePlayer(p) {
+  const i = state.players.findIndex(x => x.player_id === p.player_id);
+  if (i >= 0) state.players[i] = p; else state.players.push(p);
+  renderRooms();
+  if (p.player_id === state.activePlayerId) {
+    if (typeof p.volume_level === 'number') {
+      setRange($('np-volume'), Math.round(p.volume_level));
+      $('vol-val').textContent = Math.round(p.volume_level);
+    }
+    setPlaying(p.state === 'playing');
+  }
+}
+
+/* ---------------- now playing ---------------- */
+function setPlaying(on) {
+  state.playing = on;
+  $('ic-pause').style.display = on ? 'block' : 'none';
+  $('ic-play').style.display = on ? 'none' : 'block';
+}
+
+function renderNowPlaying() {
+  const q = activeQueue();
+  if (!q) return;
+  const item = q.current_item;
+  const media = (item && item.media_item) || item;
+  if (media) {
+    $('np-title').textContent = media.name || 'Nothing playing';
+    $('np-artist').textContent = (media.artists || []).map(a => a.name).join(', ')
+      || media.artist || '';
+    $('np-album').textContent = (media.album && media.album.name) || '';
+    state.currentUri = media.uri || null;
+    setArt(document.querySelector('.np-art'), imageUrl(item, 512));
+  }
+  const dur = (item && item.duration) || (media && media.duration) || 0;
+  if (dur) $('np-duration').textContent = fmt(dur);
+  if (!state.seeking) setRange($('np-seek'), Math.floor(q.elapsed_time || 0), dur || undefined);
+  $('np-elapsed').textContent = fmt(q.elapsed_time || 0);
+  if (q.state) setPlaying(q.state === 'playing');
+  $('btn-shuffle').classList.toggle('toggled', !!q.shuffle_enabled);
+  $('btn-repeat').classList.toggle('toggled', !!q.repeat_mode && q.repeat_mode !== 'off');
+}
+
+function updateQueue(q) {
+  state.queues.set(q.queue_id, q);
+  if (q.queue_id === state.activePlayerId) renderNowPlaying();
+}
+
+/* ---------------- album shelves ---------------- */
+function renderAlbums(items) {
+  const cards = Array.from(document.querySelectorAll('.album-card'));
+  cards.forEach((card, i) => {
+    const a = items[i];
+    if (!a) { card.style.visibility = i < items.length || items.length === 0 ? '' : 'hidden'; return; }
+    card.style.visibility = '';
+    card.dataset.uri = a.uri || '';
+    card.querySelector('.album-title').textContent = a.name || '';
+    card.querySelector('.album-artist').textContent = (a.artists || []).map(x => x.name).join(', ');
+    setArt(card.querySelector('.album-art'), imageUrl(a, 256));
+  });
+}
+
+async function loadAlbums(query, offset = 0) {
+  state.albumsQuery = query;
+  state.albumsOffset = offset;
+  const res = await ma.cmd('music/albums/library_items', { limit: 12, offset, ...query });
+  const items = res && (res.items || (Array.isArray(res) ? res : null));
+  if (items && items.length) renderAlbums(items);
+  else if (items) console.info('[MA] library returned no albums for', query);
+}
+
+const CHIP_QUERIES = [
+  { order_by: 'timestamp_added_desc' },                 // New Releases (newest in library)
+  { order_by: 'timestamp_added_desc' },                 // Recently Added
+  { order_by: 'play_count_desc' },                      // Top Albums
+  { order_by: 'random' },                               // Recommended
+  { favorite: true, order_by: 'name' },                 // My Favorites
+];
+
+/* ---------------- go live once connected ---------------- */
+ma.onReady = async () => {
+  console.info('[MA] connected — loading live data');
+  const players = await ma.cmd('players/all');
+  if (players) {
+    state.players = players.filter(p => p.available !== false);
+    // control the first playing player, else the first one
+    const playing = state.players.find(p => p.state === 'playing');
+    const active = playing || state.players[0];
+    state.activePlayerId = active ? active.player_id : null;
+    renderRooms();
+    if (active) updatePlayer(active);   // sync volume + play state to the active room
+  }
+  const queues = await ma.cmd('player_queues/all');
+  if (queues) { queues.forEach(q => state.queues.set(q.queue_id, q)); renderNowPlaying(); }
+  await loadAlbums(state.albumsQuery);
+  ma.on('player_updated', (data) => data && updatePlayer(data));
+  ma.on('player_added',  (data) => data && updatePlayer(data));
+  ma.on('queue_updated', (data) => data && updateQueue(data));
+  ma.on('queue_items_updated', (data) => data && updateQueue(data));
+  ma.on('queue_time_updated', (data, objectId) => {
+    const q = state.queues.get(objectId);
+    const elapsed = typeof data === 'number' ? data : (data && data.elapsed_time);
+    if (q && typeof elapsed === 'number') { q.elapsed_time = elapsed; if (objectId === state.activePlayerId) renderNowPlaying(); }
+  });
+};
+ma.connect();
+
+/* ---------------- UI wiring ---------------- */
+// sidebar nav (visual only for now — the Home layout is the deliverable;
+// dedicated Albums/Artists/... views are a future addition)
 document.querySelectorAll('.nav-item').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    // TODO: swap center-column view (albums/artists/... via music/* commands)
   });
 });
 
-// filter chips
-document.querySelectorAll('#chips .chip').forEach(chip => {
+// filter chips -> library queries
+document.querySelectorAll('#chips .chip').forEach((chip, i) => {
   chip.addEventListener('click', () => {
     document.querySelectorAll('#chips .chip').forEach(c => c.classList.remove('active'));
     chip.classList.add('active');
-    // TODO: reload shelves, e.g. music/albums/library_items with matching sort
+    if (ma.connected) loadAlbums(CHIP_QUERIES[i] || CHIP_QUERIES[0]);
   });
 });
 
-// room selection
-document.querySelectorAll('.room-card').forEach(card => {
-  card.addEventListener('click', () => {
+// pager arrow -> next page of the current shelf query
+$('row-next').addEventListener('click', () => {
+  if (ma.connected) loadAlbums(state.albumsQuery, state.albumsOffset + 12);
+});
+
+// search -> MA library search (Enter, or 400ms debounce)
+let searchTimer = null;
+async function runSearch(q) {
+  if (!ma.connected) return;
+  if (!q) return loadAlbums(state.albumsQuery);
+  const res = await ma.cmd('music/search', { search_query: q, media_types: ['album'], limit: 12 });
+  if (res && res.albums) renderAlbums(res.albums);
+}
+$('search-input').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runSearch(e.target.value.trim()), 400);
+});
+$('search-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { clearTimeout(searchTimer); runSearch(e.target.value.trim()); }
+});
+
+// room tiles -> switch controlled player
+document.querySelectorAll('.room-card').forEach(tile => {
+  tile.addEventListener('click', () => {
     document.querySelectorAll('.room-card').forEach(c => c.classList.remove('active'));
-    card.classList.add('active');
-    activeRoom = card.dataset.room;
-    // TODO: switch the target queue/player for transport controls
+    tile.classList.add('active');
+    if (tile.dataset.playerId) {
+      state.activePlayerId = tile.dataset.playerId;
+      const p = state.players.find(x => x.player_id === state.activePlayerId);
+      if (p) updatePlayer(p);
+      renderNowPlaying();
+    }
   });
 });
 
-// albums -> play
+// album tiles -> play on the active room
 document.querySelectorAll('.album-card').forEach(card => {
   card.addEventListener('click', () => {
-    const album = card.dataset.album;
-    document.getElementById('np-title').textContent = card.querySelector('.album-title').textContent;
-    document.getElementById('np-artist').textContent = card.querySelector('.album-artist').textContent;
-    ma.command('player_queues/play_media', { queue_id: activeRoom, media: album });
-    setPlaying(true);
+    $('np-title').textContent = card.querySelector('.album-title').textContent;
+    $('np-artist').textContent = card.querySelector('.album-artist').textContent;
+    const liveArt = card.querySelector('img.live-art');
+    setArt(document.querySelector('.np-art'), liveArt ? liveArt.src : null);
+    if (ma.connected && card.dataset.uri && state.activePlayerId) {
+      ma.cmd('player_queues/play_media', { queue_id: state.activePlayerId, media: card.dataset.uri, option: 'replace' });
+      setPlaying(true);
+    }
   });
 });
 
 // transport
-function setPlaying(state) {
-  playing = state;
-  document.getElementById('ic-pause').style.display = state ? 'block' : 'none';
-  document.getElementById('ic-play').style.display = state ? 'none' : 'block';
-  document.querySelectorAll('.room-card.active').forEach(c => c.classList.toggle('playing', state));
-}
-document.getElementById('btn-play').addEventListener('click', () => {
-  ma.playerCmd(playing ? 'pause' : 'play', activeRoom);
-  setPlaying(!playing);
+$('btn-play').addEventListener('click', () => {
+  ma.playerCmd(state.playing ? 'pause' : 'play', state.activePlayerId);
+  setPlaying(!state.playing);   // optimistic; player_updated event corrects if needed
 });
-document.getElementById('btn-prev').addEventListener('click', () => ma.playerCmd('previous', activeRoom));
-document.getElementById('btn-next').addEventListener('click', () => ma.playerCmd('next', activeRoom));
-document.getElementById('btn-shuffle').addEventListener('click', (e) => {
-  e.currentTarget.classList.toggle('toggled');
-  ma.playerCmd('shuffle', activeRoom, { shuffle_enabled: e.currentTarget.classList.contains('toggled') });
+$('btn-prev').addEventListener('click', () => ma.playerCmd('previous', state.activePlayerId));
+$('btn-next').addEventListener('click', () => ma.playerCmd('next', state.activePlayerId));
+$('btn-shuffle').addEventListener('click', (e) => {
+  const on = !e.currentTarget.classList.contains('toggled');
+  e.currentTarget.classList.toggle('toggled', on);
+  ma.cmd('player_queues/shuffle', { queue_id: state.activePlayerId, shuffle_enabled: on });
 });
-document.getElementById('btn-repeat').addEventListener('click', (e) => {
-  e.currentTarget.classList.toggle('toggled');
-  ma.playerCmd('repeat', activeRoom, { repeat_mode: e.currentTarget.classList.contains('toggled') ? 'all' : 'off' });
+$('btn-repeat').addEventListener('click', (e) => {
+  const on = !e.currentTarget.classList.contains('toggled');
+  e.currentTarget.classList.toggle('toggled', on);
+  ma.cmd('player_queues/repeat', { queue_id: state.activePlayerId, repeat_mode: on ? 'all' : 'off' });
 });
-document.getElementById('np-like').addEventListener('click', (e) => e.currentTarget.classList.toggle('liked'));
+$('np-like').addEventListener('click', (e) => {
+  const liked = e.currentTarget.classList.toggle('liked');
+  if (ma.connected && state.currentUri && liked) ma.cmd('music/favorites/add_item', { item: state.currentUri });
+  // un-favoriting needs the library item id — left for the library view
+});
 
-// sliders (progress + volume) with filled track
-function fmt(sec) { return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`; }
-function bindRange(el, onInput) {
-  const update = () => {
-    const pct = (el.value - el.min) / (el.max - el.min) * 100;
+// sliders — user-driven only (initial paint must NOT send commands)
+function bindRange(el, onCommit, onDrag) {
+  const paint = () => {
+    const pct = (el.value - el.min) / ((el.max - el.min) || 1) * 100;
     el.style.setProperty('--fill', pct + '%');
-    onInput && onInput(+el.value);
   };
-  el.addEventListener('input', update);
-  update();
+  el.addEventListener('input', () => { paint(); onDrag && onDrag(+el.value); });
+  el.addEventListener('change', () => onCommit && onCommit(+el.value));
+  el.addEventListener('pointerdown', () => { state.seeking = (el.id === 'np-seek'); });
+  el.addEventListener('pointerup', () => { state.seeking = false; });
+  paint();
 }
-bindRange(document.getElementById('np-seek'), v => {
-  document.getElementById('np-elapsed').textContent = fmt(v);
-  // ma.playerCmd('seek', activeRoom, { position: v });
-});
-bindRange(document.getElementById('np-volume'), v => {
-  document.getElementById('vol-val').textContent = v;
-  ma.playerCmd('volume_set', activeRoom, { volume_level: v });
-});
+bindRange($('np-seek'),
+  v => ma.playerCmd('seek', state.activePlayerId, { position: v }),
+  v => { $('np-elapsed').textContent = fmt(v); });
+bindRange($('np-volume'),
+  null,
+  v => { $('vol-val').textContent = v; ma.playerCmd('volume_set', state.activePlayerId, { volume_level: v }); });
 
-// demo progress ticker
+// demo-mode progress ticker (live mode gets queue_time_updated events instead)
 setInterval(() => {
-  if (!playing) return;
-  const seek = document.getElementById('np-seek');
+  if (ma.connected || !state.playing) return;
+  const seek = $('np-seek');
   if (+seek.value < +seek.max) {
-    seek.value = +seek.value + 1;
-    seek.dispatchEvent(new Event('input'));
+    setRange(seek, +seek.value + 1);
+    $('np-elapsed').textContent = fmt(+seek.value);
   }
 }, 1000);
+state.playing = true;
 
-// quick actions + device buttons: forward as commands (wire to HA scripts/scenes)
+/* ---------------- non-Music-Assistant controls ----------------
+   Device cards, bottom pills and Quick Actions are Home Assistant
+   territory (scripts / scenes / remote / light entities), NOT MA.
+   Wire haAction() to the HA WebSocket API (call_service) or leave
+   as logged placeholders until those entities are chosen.        */
+function haAction(cmd) {
+  console.info('[HA todo] action:', cmd, '— wire to a Home Assistant service call');
+}
 document.querySelectorAll('[data-action],[data-cmd]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const cmd = btn.dataset.action || btn.dataset.cmd;
-    if (cmd) ma.command(`custom/${cmd}`, { room: activeRoom });
-  });
-});
-
-// album row pager (placeholder — swaps in next page of library items)
-document.getElementById('row-next').addEventListener('click', () => {
-  ma.command('music/albums/library_items', { limit: 12, offset: 12 });
+  btn.addEventListener('click', () => haAction(btn.dataset.action || btn.dataset.cmd));
 });
 </script>
 </body>
